@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assistant documentaire</title>
+  <style>
+    :root { --bg:#f6f7fb; --card:#fff; --ink:#1d2733; --muted:#6b7684; --accent:#1f6fb2; --line:#e3e7ee; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+    header { padding:20px 28px; background:var(--card); border-bottom:1px solid var(--line); }
+    header h1 { margin:0; font-size:20px; }
+    header p { margin:4px 0 0; color:var(--muted); font-size:14px; }
+    main { display:grid; grid-template-columns: 300px 1fr; gap:20px; padding:20px 28px; max-width:1200px; margin:auto; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+    h2 { font-size:15px; margin:0 0 12px; }
+    .doc { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--line); font-size:14px; }
+    .doc small { color:var(--muted); display:block; }
+    button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 14px; cursor:pointer; font-size:14px; }
+    button.link { background:none; color:#c0392b; padding:4px; }
+    button:disabled { opacity:.6; cursor:wait; }
+    #chat { min-height:420px; display:flex; flex-direction:column; gap:12px; }
+    .msg { padding:12px 14px; border-radius:10px; max-width:85%; line-height:1.5; white-space:pre-wrap; }
+    .user { align-self:flex-end; background:var(--accent); color:#fff; }
+    .bot { align-self:flex-start; background:#eef3f9; }
+    .sources { margin-top:8px; font-size:12px; color:var(--muted); }
+    form.ask { display:flex; gap:8px; margin-top:14px; }
+    form.ask input { flex:1; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font-size:14px; }
+    .status { font-size:13px; color:var(--muted); margin-top:8px; }
+    @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Assistant documentaire</h1>
+    <p>Posez vos questions sur vos PDF : les réponses citent leurs sources.</p>
+  </header>
+  <main>
+    <section class="card">
+      <h2>Documents</h2>
+      <input type="file" id="file" accept="application/pdf">
+      <button id="upload" style="margin-top:10px;width:100%">Ajouter le PDF</button>
+      <div class="status" id="status"></div>
+      <div id="docs" style="margin-top:12px"></div>
+    </section>
+    <section class="card">
+      <h2>Discussion</h2>
+      <div id="chat"></div>
+      <form class="ask" id="ask">
+        <input id="question" placeholder="Votre question…" autocomplete="off" required minlength="3">
+        <button type="submit" id="send">Envoyer</button>
+      </form>
+    </section>
+  </main>
+  <script>
+    // Petits utilitaires d'affichage
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+    async function loadDocs() {
+      const docs = await (await fetch("/documents")).json();
+      $("docs").innerHTML = docs.length
+        ? docs.map((d) => `<div class="doc"><div>${esc(d.source)}<small>${d.pages} pages · ${d.chunks} passages</small></div>
+            <button class="link" onclick="removeDoc('${d.doc_id}')">Supprimer</button></div>`).join("")
+        : '<p class="status">Aucun document pour l\'instant.</p>';
+    }
+
+    async function removeDoc(id) {
+      await fetch(`/documents/${id}`, { method: "DELETE" });
+      loadDocs();
+    }
+
+    $("upload").onclick = async () => {
+      const file = $("file").files[0];
+      if (!file) return;
+      const body = new FormData();
+      body.append("file", file);
+      $("upload").disabled = true;
+      $("status").textContent = "Indexation en cours…";
+      const res = await fetch("/documents", { method: "POST", body });
+      const data = await res.json();
+      $("status").textContent = res.ok ? `${data.chunks} passages indexés.` : data.detail;
+      $("upload").disabled = false;
+      loadDocs();
+    };
+
+    function addMessage(html, cls) {
+      const div = document.createElement("div");
+      div.className = `msg ${cls}`;
+      div.innerHTML = html;
+      $("chat").appendChild(div);
+      div.scrollIntoView({ behavior: "smooth" });
+    }
+
+    $("ask").onsubmit = async (e) => {
+      e.preventDefault();
+      const question = $("question").value.trim();
+      addMessage(esc(question), "user");
+      $("question").value = "";
+      $("send").disabled = true;
+      const res = await fetch("/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+      });
+      const data = await res.json();
+      const sources = (data.sources || [])
+        .map((s) => `[${s.index}] ${esc(s.source)}, p. ${s.page} (score ${s.score})`).join("<br>");
+      addMessage(esc(data.answer || data.detail || "Erreur") + (sources ? `<div class="sources">${sources}</div>` : ""), "bot");
+      $("send").disabled = false;
+    };
+
+    loadDocs();
+  </script>
+</body>
+</html>
